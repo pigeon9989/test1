@@ -80,11 +80,17 @@ jobs:
         run: pnpm audit --prod --audit-level=high
 
       - name: trivy fs — INFORMATIONAL
+        # Best-effort scan. trivy fetches its CVE DB from GitHub Releases,
+        # which is currently flaky alongside the broader GitHub incident.
+        # `continue-on-error` keeps the pipeline moving when trivy can't
+        # install — actual blocking guards are gitleaks / semgrep / pnpm audit.
+        continue-on-error: true
         run: |
-          set -euo pipefail
+          set +e
           curl -fsSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.57.1
+            | sh -s -- -b /usr/local/bin v0.57.1 || { echo "::warning::trivy install failed — skipping"; exit 0; }
           trivy fs --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 . || true
+          exit 0
 
       - name: typecheck + test + build
         run: |
