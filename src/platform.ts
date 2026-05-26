@@ -36,12 +36,41 @@ function host(): HostBridge | null {
 let nextId = 0;
 const pending = new Map<string, (res: { result?: unknown; error?: { message: string } }) => void>();
 let listenerAttached = false;
+
+// Host origin discovery. Refusing to default to "*" — sending to wildcard
+// from inside an iframe leaks every call's args (incl. tokens) to whatever
+// page ends up hosting us. Resolution order:
+//   1. ?__mfHost=<origin>           — explicit; host adds this when it builds
+//                                     the iframe src
+//   2. location.ancestorOrigins[0]  — Chromium-only but reliable
+//   3. document.referrer's origin   — present unless Referrer-Policy stripped
+// If none of those produce an origin we refuse to send (returns null).
+let cachedHostOrigin: string | null | undefined;
+function detectHostOrigin(): string | null {
+  if (cachedHostOrigin !== undefined) return cachedHostOrigin;
+  if (typeof window === 'undefined') return (cachedHostOrigin = null);
+  const fromQuery = new URLSearchParams(window.location.search).get('__mfHost');
+  if (fromQuery) return (cachedHostOrigin = fromQuery);
+  const anc = (window.location as unknown as { ancestorOrigins?: { length: number; [0]: string } }).ancestorOrigins;
+  if (anc && anc.length > 0) return (cachedHostOrigin = anc[0]);
+  if (document.referrer) {
+    try { return (cachedHostOrigin = new URL(document.referrer).origin); } catch { /* fall through */ }
+  }
+  return (cachedHostOrigin = null);
+}
+
 function ensureListener() {
   if (listenerAttached || typeof window === 'undefined') return;
   listenerAttached = true;
   window.addEventListener('message', (ev) => {
+    // Verify the sender is who we think the host is. Drop any message
+    // whose origin doesn't match our resolved host (or, if we couldn't
+    // resolve one yet, snapshot the first matching ns message's origin).
+    const expected = detectHostOrigin();
+    if (expected && ev.origin !== expected) return;
     const d = ev.data as { ns?: string; kind?: string; id?: string; result?: unknown; error?: { message: string } };
     if (!d || d.ns !== NS) return;
+    if (!expected) cachedHostOrigin = ev.origin; // adopt from first valid message
     if (d.kind === 'result' && d.id) {
       const fn = pending.get(d.id);
       if (fn) { pending.delete(d.id); fn({ result: d.result, error: d.error }); }
@@ -52,13 +81,15 @@ function ensureListener() {
 async function callIframe(method: string, args: unknown[] = []): Promise<unknown> {
   if (typeof window === 'undefined') throw new Error('no window');
   ensureListener();
+  const target = detectHostOrigin();
+  if (!target) throw new Error('mf-platform: host origin not resolvable — pass ?__mfHost=<origin> in the iframe URL');
   const id = `${MODULE}-${++nextId}`;
   return new Promise<unknown>((resolve, reject) => {
     pending.set(id, ({ result, error }) => {
       if (error) reject(new Error(error.message));
       else resolve(result);
     });
-    window.parent.postMessage({ ns: NS, kind: 'call', id, module: MODULE, method, args }, '*');
+    window.parent.postMessage({ ns: NS, kind: 'call', id, module: MODULE, method, args }, target);
     setTimeout(() => { if (pending.has(id)) { pending.delete(id); reject(new Error('timeout')); } }, 3000);
   });
 }
