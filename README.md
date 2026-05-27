@@ -4,7 +4,8 @@
 
 - expose: `./App` (default export)
 - MF runtime name: `notes`
-- GitHub Pages base: `/test1/`
+- GitHub Pages base: `/test1/` (보조 채널)
+- 운영 URL: `https://mf.gonogono.org/remotes/test1/` (호스트 서버가 직접 빌드/서빙)
 
 ## 로컬에서 실행
 
@@ -13,39 +14,48 @@ pnpm install
 pnpm dev   # http://localhost:5177 — standalone 미리보기
 ```
 
-host와 함께 실행하려면 host-shell의 `public/local-registry.json`에 이미 `notes` 항목이 들어있습니다. status를 `disabled`에서 `active`로 바꾸고 entry를 `http://localhost:5177/mf-manifest.json` 으로 바꾸면 host(:5175)에서 보입니다.
+host와 함께 실행하려면 host-shell의 `public/local-registry.json`에 이미 `notes` 항목이
+`status: "active"`로 들어 있고 dev entry는 `http://localhost:5177/mf-manifest.json`을
+가리킵니다. 그대로 `cd ../host-shell && pnpm dev`만 띄우면 host(:5175)에서 mount됩니다.
 
-## 처음 GitHub에 push 하기
+## 서비스에 반영 (정해진 운영 흐름)
 
-이 폴더는 빈 GitHub repo `pigeon9989/test1`로 push할 준비가 되어 있습니다:
+이 모듈은 **호스트 서버가 직접 git pull + vite build**해서 `https://mf.gonogono.org/remotes/test1/`로
+서빙합니다. GitHub Pages는 보조 채널로 함께 deploy되지만 호스트가 쓰진 않습니다.
+
+코드 변경 흐름:
+1. 이 repo(`pigeon9989/test1`)에 `git push origin main`
+2. (옵셔널) GitHub Actions가 `gh-pages` branch로 deploy (보안 게이트 + 빌드)
+3. 호스트 운영자가 로컬에서 `bash scripts/deploy.sh` 한 번 — 서버가 git pull + vite build
+   `--base /remotes/test1/`로 빌드, `local-registry.json`의 `entry`/`origin`/`version`/`buildSha`를
+   자동 stamp
+4. 사용자 브라우저 새로고침 → 새 manifest fetch (no-cache) → 새 hashed chunk load
+
+## CI/CD (action-less workflow)
+
+`.github/workflows/deploy.yml`은 **`uses:` action을 쓰지 않습니다** — codeload.github.com
+장애에도 빌드가 살아남도록 모든 step을 raw shell로:
+
+1. **security gates** (blocking): gitleaks · semgrep · pnpm audit
+2. **trivy fs** (informational, continue-on-error)
+3. **build**: node + pnpm 직접 install · typecheck · test · vite build
+4. **deploy to `gh-pages` branch** (main + push 이벤트에서만)
+
+Pages publish는 GitHub Pages의 branch 모드가 자동 처리. SARIF 업로드(github/codeql-action)는
+codeload 장애 회피를 위해 제거된 상태 — 보안 검사 자체는 그대로 blocking.
+
+## 처음 GitHub에 push 하기 (이미 끝남 — 새 fork 시 참고)
+
+이 폴더는 이미 `pigeon9989/test1`에 push되어 운영 중입니다. 새로 시작하는 경우만:
 
 ```powershell
 git init
 git add .
 git commit -m "feat: initial scaffold for notes remote"
 git branch -M main
-git remote add origin https://github.com/pigeon9989/test1.git
+git remote add origin https://github.com/<owner>/<repo>.git
 git push -u origin main
 ```
 
-push되면 `.github/workflows/deploy.yml`이 자동 실행:
-
-1. **security gates** — gitleaks · semgrep · pnpm audit · trivy
-2. **build** — typecheck · test · vite build
-3. **deploy to GitHub Pages** (main 브랜치 + push 이벤트에서만)
-
-## GitHub Pages 활성화
-
-저장소 Settings → Pages → **Source: GitHub Actions**로 설정하세요. 워크플로우가 처음 deploy 단계까지 가서 성공하면 자동 활성화되기도 하지만, Source 옵션이 "Deploy from a branch"로 되어 있다면 첫 배포가 실패할 수 있어요.
-
-배포 URL: `https://pigeon9989.github.io/test1/`
-
-manifest 검증:
-
-```powershell
-curl https://pigeon9989.github.io/test1/mf-manifest.json
-```
-
-## host에 등록
-
-배포가 끝나면 host-shell의 `public/local-registry.json`에서 `notes` 항목을 `"status": "active"`로 바꾸면 host의 스토어에 즉시 나타납니다. (운영에선 DDB registry로 PUT — `docs/DEVELOPER_GUIDE.md`)
+`.github/workflows/deploy.yml`의 `gh-pages` 모드를 쓰려면 저장소 Settings → Pages →
+Source = **Deploy from a branch** → `gh-pages` / `(root)`로 한 번 설정.
