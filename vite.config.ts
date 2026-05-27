@@ -1,9 +1,18 @@
 import { defineConfig, loadEnv } from 'vite';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { federation } from '@module-federation/vite';
 
 // MUST match the registry entry's `name`. Repos use the slug 'notes'.
 const REMOTE_NAME = 'notes';
+
+// Local dev resolves `@mf-platform/ui` from the workspace source tree.
+// In the standalone repo on the production server, this path doesn't
+// exist — `scripts/patch-remote-config.mjs` rewires the import to the
+// host's federation expose at runtime instead.
+const localUiSrc = fileURLToPath(new URL('../packages/ui/src/index.ts', import.meta.url));
+const hasLocalUi = existsSync(localUiSrc);
 
 // GitHub Pages serves project sites at https://<owner>.github.io/<repo>/.
 // Use the FULL absolute URL so the emitted `mf-manifest.json` has
@@ -35,7 +44,12 @@ export default defineConfig(({ command, mode }) => {
         dts: false,
       }),
     ],
-    resolve: { alias: { '@': new URL('./src', import.meta.url).pathname } },
+    resolve: {
+      alias: {
+        '@': new URL('./src', import.meta.url).pathname,
+        ...(hasLocalUi ? { '@mf-platform/ui': localUiSrc } : {}),
+      },
+    },
     server: { port, strictPort: true, cors: true, origin },
     preview: { port, strictPort: true, cors: true },
     build: {
